@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Uniplex MCP Server - Entry Point
- * Version: 1.0.0
- * 
+ * Version: 1.2.0
+ *
  * Usage:
  *   npx uniplex-mcp-sdk --config config.json
  *   uniplex-mcp-server --config config.json
@@ -21,7 +21,7 @@ function loadConfig(): UniplexMCPServerConfig {
   // Check for --config argument
   const configArgIndex = process.argv.findIndex(arg => arg === '--config' || arg === '-c');
   let configPath: string | undefined;
-  
+
   if (configArgIndex !== -1 && process.argv[configArgIndex + 1]) {
     configPath = process.argv[configArgIndex + 1];
   } else {
@@ -31,7 +31,7 @@ function loadConfig(): UniplexMCPServerConfig {
       'config.json',
       '.uniplex/mcp-config.json',
     ];
-    
+
     for (const path of defaultPaths) {
       if (existsSync(path)) {
         configPath = path;
@@ -39,17 +39,15 @@ function loadConfig(): UniplexMCPServerConfig {
       }
     }
   }
-  
+
   if (configPath && existsSync(configPath)) {
     const content = readFileSync(resolve(configPath), 'utf-8');
     const config = JSON.parse(content);
-    
+
     // Load tool handlers if specified as module paths
     if (config.tools) {
       config.tools = config.tools.map((tool: any) => {
         if (typeof tool.handler === 'string') {
-          // Handler is a module path - would need dynamic import
-          // For now, create a placeholder
           tool.handler = async (input: unknown) => {
             throw new Error(`Handler module ${tool.handler} not loaded`);
           };
@@ -57,21 +55,21 @@ function loadConfig(): UniplexMCPServerConfig {
         return tool;
       });
     }
-    
+
     return config;
   }
-  
+
   // Environment-based config
   const gateId = process.env.UNIPLEX_GATE_ID;
   const apiUrl = process.env.UNIPLEX_API_URL ?? 'https://api.uniplex.dev';
-  
+
   if (!gateId) {
     console.error('Error: No config file found and UNIPLEX_GATE_ID not set');
     console.error('Usage: uniplex-mcp-server --config config.json');
     console.error('   or: UNIPLEX_GATE_ID=gate_xxx uniplex-mcp-server');
     process.exit(1);
   }
-  
+
   return {
     gate_id: gateId,
     uniplex_api_url: apiUrl,
@@ -102,7 +100,7 @@ async function main(): Promise<void> {
   // Check for help
   if (process.argv.includes('--help') || process.argv.includes('-h')) {
     console.log(`
-Uniplex MCP Server v1.0.0
+Uniplex MCP Server v1.2.0
 
 USAGE:
   uniplex-mcp-server [OPTIONS]
@@ -148,30 +146,30 @@ CONFIG FILE FORMAT:
 `);
     process.exit(0);
   }
-  
+
   // Check for version
   if (process.argv.includes('--version') || process.argv.includes('-v')) {
-    console.log('1.0.0');
+    console.log('1.2.0');
     process.exit(0);
   }
-  
+
   // Load config and start server
   const config = loadConfig();
   const server = new UniplexMCPServer(config);
-  
+
   // Handle shutdown
   process.on('SIGINT', async () => {
     console.error('\nShutting down...');
     await server.stop();
     process.exit(0);
   });
-  
+
   process.on('SIGTERM', async () => {
     console.error('\nShutting down...');
     await server.stop();
     process.exit(0);
   });
-  
+
   // Run server
   await server.run();
 }
@@ -203,5 +201,64 @@ export {
   meetsSLARequirements,
 } from './commerce.js';
 
-// Export types
-export * from './types.js';
+// Protocol SDK re-exports (§14A, §14B)
+export {
+  DenyReason,
+  DenialCode,
+  OBLIGATION_TOKENS,
+  CONSTRAINT_KEYS,
+  evaluateConstraints,
+  evaluateAnonymousAccess,
+  MemoryAnonymousRateLimiter,
+  CumulativeStateTracker,
+  CONSTRAINT_TYPES,
+} from './types.js';
+
+export type {
+  AnonymousAccessPolicy,
+  AnonymousDecision,
+  AnonymousRateLimiter,
+  CELResult,
+  ConstraintDecision,
+  ConstraintEvaluation,
+  ConstraintSet,
+  CumulativeState,
+  ObligationToken,
+  ConstraintKey,
+  VerifyResult,
+} from './types.js';
+
+// Export remaining types
+export type {
+  Passport,
+  CachedCatalog,
+  CatalogPermission,
+  CatalogVersion,
+  VerifyDenial,
+  RateLimiter,
+  ConstraintMapping,
+  Session,
+  SessionState,
+  SafeDefaultConfig,
+  CacheConfig,
+  AuditConfig,
+  CommerceConfig,
+  ServerCapabilities,
+  UniplexCapabilities,
+  Attestation,
+  ConsumptionAttestation,
+  ConsumptionData,
+  PricingConstraints,
+  PlatformFeeConstraints,
+  RequestNonce,
+  BillingPeriod,
+  RequestContext,
+  ToolMapping,
+  JSONSchema,
+  PricingModel,
+  SLAConstraints,
+  ServiceAdvertisement,
+  DiscoveryQuery,
+  DiscoveryResult,
+  TransformMode,
+} from './types.js';

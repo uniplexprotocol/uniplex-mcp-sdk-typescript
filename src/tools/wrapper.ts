@@ -273,13 +273,13 @@ export class ToolBuilder {
    */
   costConstraint(inputPath: string, transform: 'dollars_to_cents' | 'custom' = 'dollars_to_cents', precision?: number): this {
     const mapping: ConstraintMapping = {
-      key: 'core:cost:max',
+      key: 'core:cost:max_per_action',
       source: 'input',
       input_path: inputPath,
       transform,
       precision: precision ?? 2,
     };
-    return this.constraint(mapping).requireConstraint('core:cost:max');
+    return this.constraint(mapping).requireConstraint('core:cost:max_per_action');
   }
   
   handler(handler: ToolDefinition['handler']): this {

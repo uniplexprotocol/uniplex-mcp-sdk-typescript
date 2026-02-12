@@ -1,46 +1,42 @@
 /**
  * Uniplex MCP Server Type Definitions
- * Version: 1.0.0 (2026-02-03)
- * 
- * Implements types from Uniplex MCP Server Specification v1.0.0
- * Cross-references: Permission Catalog Spec v1.2.4
+ * Version: 1.2.0
+ *
+ * Shared protocol types are imported from the `uniplex` protocol SDK.
+ * MCP-specific types are defined here.
  */
 
 // =============================================================================
-// DENIAL CODES (matches Permission Catalog DenialCode enum)
+// RE-EXPORTS FROM PROTOCOL SDK
 // =============================================================================
 
-export type DenialCode =
-  | 'NO_PASSPORT'
-  | 'ISSUER_NOT_TRUSTED'
-  | 'INVALID_SIGNATURE'
-  | 'PASSPORT_EXPIRED'
-  | 'PASSPORT_REVOKED'
-  | 'PERMISSION_NOT_IN_CATALOG'
-  | 'PERMISSION_NOT_IN_PASSPORT'
-  | 'CONSTRAINT_EXCEEDED'
-  | 'RATE_LIMIT_EXCEEDED'
-  | 'APPROVAL_REQUIRED'
-  | 'CATALOG_VERSION_DEPRECATED'
-  | 'CATALOG_VERSION_UNKNOWN'
-  | 'CATALOG_VERSION_STALE';
+export {
+  DenyReason,
+  type AnonymousAccessPolicy,
+  type AnonymousDecision,
+  type AnonymousRateLimiter,
+  type CELResult,
+  type ConstraintDecision,
+  type ConstraintEvaluation,
+  type ConstraintSet,
+  type CumulativeState,
+  type ObligationToken,
+  type ConstraintKey,
+} from 'uniplex';
 
-// =============================================================================
-// MCP ERROR CODES
-// =============================================================================
+export {
+  OBLIGATION_TOKENS,
+  CONSTRAINT_KEYS,
+  evaluateConstraints,
+  CumulativeStateTracker,
+} from 'uniplex';
 
-export type UniplexMCPError =
-  | 'UNIPLEX_UNAVAILABLE'
-  | 'GATE_NOT_FOUND'
-  | 'PASSPORT_INVALID'
-  | 'PASSPORT_EXPIRED'
-  | 'PERMISSION_DENIED'
-  | 'CONSTRAINT_EXCEEDED'
-  | 'APPROVAL_REQUIRED'
-  | 'RATE_LIMIT_EXCEEDED'
-  | 'CATALOG_VERSION_DEPRECATED'
-  | 'CATALOG_VERSION_UNKNOWN'
-  | 'CATALOG_VERSION_STALE';
+export {
+  evaluateAnonymousAccess,
+  MemoryAnonymousRateLimiter,
+} from 'uniplex';
+
+import { DenyReason, type ConstraintDecision } from 'uniplex';
 
 // =============================================================================
 // TRANSFORM MODE
@@ -60,20 +56,22 @@ export interface ConstraintTypeDefinition {
 }
 
 /**
- * Constraint type registry - defines limit vs term constraints
- * 
+ * Constraint type registry — defines limit vs term constraints.
+ *
  * - limit: access control constraints (min-merge, passport can restrict)
- * - term: commercial terms (gate-authoritative, credentials bind TO)
+ * - term:  commercial terms (gate-authoritative, credentials bind TO)
+ *
+ * Key names align with CONSTRAINT_KEYS from the protocol SDK.
  */
 export const CONSTRAINT_TYPES: Record<string, ConstraintTypeDefinition> = {
   // Access control constraints (limit type)
+  'core:rate:max_per_minute': { type: 'limit', valueType: 'integer' },
   'core:rate:max_per_hour': { type: 'limit', valueType: 'integer' },
   'core:rate:max_per_day': { type: 'limit', valueType: 'integer' },
-  'core:rate:max_per_minute': { type: 'limit', valueType: 'integer' },
-  'core:cost:max': { type: 'limit', valueType: 'integer' },
-  'core:cost:currency': { type: 'limit', valueType: 'string' },
-  
-  // Commerce constraints (term type) — forward compatibility with Uni-Commerce
+  'core:cost:max_per_action': { type: 'limit', valueType: 'integer' },
+  'core:cost:max_cumulative': { type: 'limit', valueType: 'integer' },
+
+  // Commerce constraints (term type)
   'core:pricing:per_call_cents': { type: 'term', valueType: 'integer' },
   'core:pricing:per_minute_cents': { type: 'term', valueType: 'integer' },
   'core:pricing:model': { type: 'term', valueType: 'string' },
@@ -84,6 +82,17 @@ export const CONSTRAINT_TYPES: Record<string, ConstraintTypeDefinition> = {
   'core:sla:p99_response_ms': { type: 'term', valueType: 'integer' },
   'core:platform_fee:basis_points': { type: 'term', valueType: 'integer' },
 };
+
+// =============================================================================
+// DENIAL CODE — backward-compatible alias for DenyReason
+// =============================================================================
+
+/**
+ * DenialCode is the legacy name used throughout this SDK.
+ * It is now an alias for protocol SDK's DenyReason enum.
+ */
+export type DenialCode = DenyReason;
+export const DenialCode = DenyReason;
 
 // =============================================================================
 // PASSPORT
@@ -105,7 +114,7 @@ export interface Passport {
   expires_at: string;  // RFC3339 timestamp
   issued_at: string;   // RFC3339 timestamp
   catalog_version_pin?: Record<string, number>;  // gate_id -> version
-  
+
   // Computed at load time for O(1) lookup
   claimsByKey: Record<string, PassportPermission>;
 }
@@ -136,7 +145,7 @@ export interface CachedCatalog {
   versions: Record<number, CatalogVersion>;
   min_compatible_version: number;
   cached_at: number;  // Unix timestamp
-  
+
   // Alias for current.permissionsByKey
   permissionsByKey: Record<string, CatalogPermission>;
 }
@@ -146,13 +155,32 @@ export interface CachedCatalog {
 // =============================================================================
 
 export interface VerifyDenial {
-  code: DenialCode;
+  code: DenyReason;
   message: string;
   upgrade_template?: string;
 }
 
+/**
+ * Result of local verification.
+ *
+ * Three-tier decision model (§14B.2):
+ *   BLOCK   → wire "deny", no obligations
+ *   SUSPEND → wire "deny", obligations=["require_approval"], reason_codes=["approval_required"]
+ *   PERMIT  → wire "permit"
+ *
+ * `allowed` is kept for backward compatibility: true iff decision === 'permit'.
+ */
 export interface VerifyResult {
+  /** Backward-compatible flag: true when decision is "permit". */
   allowed: boolean;
+  /** Wire-level decision: "permit" or "deny". */
+  decision: 'permit' | 'deny';
+  /** Internal three-tier decision from CEL. */
+  constraint_decision?: ConstraintDecision;
+  /** Populated on SUSPEND: ["approval_required"]. */
+  reason_codes?: string[];
+  /** Populated on SUSPEND: ["require_approval"]. */
+  obligations?: string[];
   denial?: VerifyDenial;
   effective_constraints?: Record<string, unknown>;
   confident: boolean;  // true if cache was fresh enough
@@ -283,39 +311,46 @@ export interface SessionDigestConfig {
 
 export interface CommerceConfig {
   enabled: boolean;
-  issue_receipts: boolean;  // Issue consumption attestations after tool execution
-  signing_key_id?: string;  // Key ID for signing attestations
+  issue_receipts: boolean;
+  signing_key_id?: string;
 }
+
+// Anonymous access policy is imported from protocol SDK (AnonymousAccessPolicy).
+// We alias it in server config under the name `anonymous`.
+import type { AnonymousAccessPolicy } from 'uniplex';
 
 export interface UniplexMCPServerConfig {
   // Uniplex connection
   uniplex_api_url: string;
   gate_id: string;
-  gate_secret?: string;  // For server-side operations (NEVER in client configs)
-  signing_key_id?: string;  // Key ID for signing attestations
-  
+  gate_secret?: string;
+  signing_key_id?: string;
+
   // Safe default settings
   safe_default: SafeDefaultConfig;
-  
+
   // Swarm support
   swarm?: SwarmConfig;
-  
+
   // Issuer trust
   trusted_issuers: string[];
   trust_networks?: string[];
-  
+
   // Tool mappings
   tools: ToolMapping[];
-  
+
   // Cache settings
   cache?: CacheConfig;
-  
+
   // Audit settings
   audit?: AuditConfig;
-  
+
   // Commerce settings (Uni-Commerce profile)
   commerce?: CommerceConfig;
-  
+
+  // Anonymous access policy (§14A)
+  anonymous?: AnonymousAccessPolicy;
+
   // Test mode
   test_mode?: {
     enabled: boolean;
@@ -370,7 +405,7 @@ export interface UniplexToolMeta {
 }
 
 export interface UniplexDenialMeta {
-  denial_code: DenialCode;
+  denial_code: DenyReason;
   message: string;
   upgrade_template?: string;
   suggestions?: string[];
@@ -386,10 +421,10 @@ export interface Attestation {
   passport_id: string;
   action: string;
   result: 'allowed' | 'denied';
-  denial_code?: DenialCode;
+  denial_code?: DenyReason;
   context: Record<string, unknown>;
   timestamp: string;  // RFC3339
-  attestation_json: string;  // Canonical JSON - MUST NOT be recomputed
+  attestation_json: string;
   signature: string;
 }
 
@@ -397,45 +432,29 @@ export interface Attestation {
 // COMMERCE TYPES (Uni-Commerce Profile)
 // =============================================================================
 
-/**
- * Pricing model for a permission
- */
 export type PricingModel = 'per_call' | 'per_minute' | 'subscription' | 'usage';
 
-/**
- * Pricing constraints extracted from catalog
- */
 export interface PricingConstraints {
   per_call_cents?: number;
   per_minute_cents?: number;
   subscription_cents?: number;
   model?: PricingModel;
-  currency?: string;  // ISO 4217 (e.g., "USD")
+  currency?: string;
   free_tier_calls?: number;
 }
 
-/**
- * SLA constraints extracted from catalog
- */
 export interface SLAConstraints {
-  uptime_basis_points?: number;     // 99.95% = 9995
+  uptime_basis_points?: number;
   response_time_ms?: number;
   p99_response_ms?: number;
   guaranteed_response_ms?: number;
 }
 
-/**
- * Platform fee configuration
- */
 export interface PlatformFeeConstraints {
-  basis_points?: number;  // 2% = 200
-  recipient?: string;     // Gate ID of fee recipient
+  basis_points?: number;
+  recipient?: string;
 }
 
-/**
- * Service advertisement - extends catalog permission with commerce metadata
- * Cross-ref: Patent #26, Section 2.3
- */
 export interface ServiceAdvertisement {
   permission_key: string;
   display_name: string;
@@ -446,32 +465,20 @@ export interface ServiceAdvertisement {
   platform_fee?: PlatformFeeConstraints;
 }
 
-/**
- * Consumption data for a single transaction
- * Cross-ref: Patent #27, Section 2.4
- */
 export interface ConsumptionData {
   units: number;
   cost_cents: number;
   platform_fee_cents: number;
-  timestamp: string;  // RFC3339
-  duration_ms?: number;  // For per-minute pricing
+  timestamp: string;
+  duration_ms?: number;
 }
 
-/**
- * Request nonce from agent for bilateral verification
- * Cross-ref: Patent #27, Section 2.1
- */
 export interface RequestNonce {
-  nonce: string;        // Random string from agent
-  timestamp: string;    // When agent generated nonce
+  nonce: string;
+  timestamp: string;
   agent_id: string;
 }
 
-/**
- * Consumption attestation - receipt issued by gate after tool execution
- * Cross-ref: Patent #27, Commerce Integration Plan Section 2.4
- */
 export interface ConsumptionAttestation {
   attestation_type: 'consumption';
   attestation_id: string;
@@ -481,33 +488,21 @@ export interface ConsumptionAttestation {
   permission_key: string;
   catalog_version: number;
   catalog_content_hash?: string;
-  
-  // Bilateral verification: echo agent's nonce
   request_nonce?: string;
-  
-  // Commercial terms at time of transaction
   effective_constraints: {
     pricing?: PricingConstraints;
     platform_fee?: PlatformFeeConstraints;
   };
-  
-  // Consumption details
   consumption: ConsumptionData;
-  
-  // Cryptographic proof
   proof: {
     type: 'JWS';
-    kid: string;  // Key ID (e.g., "gate_weather-pro#key-1")
-    sig: string;  // BASE64URL signature
+    kid: string;
+    sig: string;
   };
 }
 
-/**
- * Discovery query for finding services
- * Cross-ref: Patent #26, Section 2.5
- */
 export interface DiscoveryQuery {
-  capability?: string;           // Wildcard pattern (e.g., "weather:*")
+  capability?: string;
   max_price_cents?: number;
   min_uptime_basis_points?: number;
   min_trust_level?: number;
@@ -516,9 +511,6 @@ export interface DiscoveryQuery {
   offset?: number;
 }
 
-/**
- * Discovery result - gate matching query criteria
- */
 export interface DiscoveryResult {
   gate_id: string;
   gate_name?: string;
@@ -528,25 +520,15 @@ export interface DiscoveryResult {
   catalog_content_hash?: string;
 }
 
-/**
- * Billing aggregation for settlement
- * Cross-ref: Patent #27, Section 3.2
- */
 export interface BillingPeriod {
-  period_start: string;  // RFC3339
-  period_end: string;    // RFC3339
+  period_start: string;
+  period_end: string;
   agent_id: string;
   gate_id: string;
-  
-  // Aggregated totals
   total_calls: number;
   total_cost_cents: number;
   total_platform_fee_cents: number;
-  
-  // Attestation references for audit
   attestation_ids: string[];
-  
-  // Merkle root for session digest mode
   merkle_root?: string;
 }
 
@@ -554,20 +536,12 @@ export interface BillingPeriod {
 // COMMERCE FUNCTIONS
 // =============================================================================
 
-/**
- * Platform fee computation (Normative)
- * fee_cents = ceil(service_cost_cents * basis_points / 10000)
- * Cross-ref: Patent #27, Section 4.1
- */
 export function computePlatformFee(serviceCostCents: number, basisPoints: number): number {
   if (serviceCostCents < 0) throw new Error('Cost cannot be negative');
   if (basisPoints < 0) throw new Error('Basis points cannot be negative');
   return Math.ceil(serviceCostCents * basisPoints / 10000);
 }
 
-/**
- * Compute cost for a single call based on pricing constraints
- */
 export function computeCallCost(pricing: PricingConstraints, units: number = 1): number {
   if (pricing.per_call_cents !== undefined) {
     return pricing.per_call_cents * units;
@@ -575,9 +549,6 @@ export function computeCallCost(pricing: PricingConstraints, units: number = 1):
   return 0;
 }
 
-/**
- * Compute cost for time-based pricing
- */
 export function computeTimeCost(pricing: PricingConstraints, durationMs: number): number {
   if (pricing.per_minute_cents !== undefined) {
     const minutes = Math.ceil(durationMs / 60000);
@@ -586,9 +557,6 @@ export function computeTimeCost(pricing: PricingConstraints, durationMs: number)
   return 0;
 }
 
-/**
- * Extract pricing constraints from a constraint record
- */
 export function extractPricingConstraints(constraints: Record<string, unknown>): PricingConstraints {
   return {
     per_call_cents: constraints['core:pricing:per_call_cents'] as number | undefined,
@@ -600,9 +568,6 @@ export function extractPricingConstraints(constraints: Record<string, unknown>):
   };
 }
 
-/**
- * Extract SLA constraints from a constraint record
- */
 export function extractSLAConstraints(constraints: Record<string, unknown>): SLAConstraints {
   return {
     uptime_basis_points: constraints['core:sla:uptime_basis_points'] as number | undefined,
@@ -612,9 +577,6 @@ export function extractSLAConstraints(constraints: Record<string, unknown>): SLA
   };
 }
 
-/**
- * Extract platform fee constraints from a constraint record
- */
 export function extractPlatformFeeConstraints(constraints: Record<string, unknown>): PlatformFeeConstraints {
   return {
     basis_points: constraints['core:platform_fee:basis_points'] as number | undefined,

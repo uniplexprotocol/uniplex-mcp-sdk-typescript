@@ -204,6 +204,7 @@ export class UniplexMCPServer {
       rateLimiter: this.rateLimiter,
       action: tool.permission_key,
       context,
+      anonymousPolicy: this.config.anonymous,
     });
     
     // Handle denial
