@@ -42,7 +42,7 @@
     "passports"
   ],
   "author": "Standard Logic Co.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/uniplexprotocol/uniplex-mcp-sdk-typescript.git"
